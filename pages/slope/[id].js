@@ -896,18 +896,15 @@ export default function SlopeDetail() {
         </div>
       </div>
 
-      {/* 슬로프 기초 정보 */}
+      {/* 슬로프 정보 */}
       <div className="section">
-        <div className="section-title">슬로프 기초 정보</div>
+        <div className="section-title">슬로프 정보</div>
         <div className="info-list">
           <div>• 지역: {slope.region}</div>
           <div>• 최소 수위: {slope.minWaterLevelCm}cm</div>
           <div>• 이용료: {slope.fee}</div>
           <div>• 사용가능여부: {slope.availableStatus}</div>
-          <div>• 운영시간: {slope.operatorHours}</div>
           <div>• 경사/노출: {slope.slopeAngle}</div>
-          <div>• 주차 공간: {slope.parking}</div>
-          <div>• 혼잡도 추정: {slope.congestion}</div>
           <div>• 위치: 지도 보기(향후 연동 예정)</div>
         </div>
       </div>
