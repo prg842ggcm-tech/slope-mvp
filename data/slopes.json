@@ -1,0 +1,47 @@
+[
+    {
+      "id": "jebu",
+      "name": "제부마리나",
+      "region": "경기 남부",
+      "obsCode": "DT_0008",
+      "minWaterLevelCm": 300,
+      "fee": "유료(2만원)",
+      "availableStatus": "사용가능",
+      "operatorHours": "09:00~21:00",
+      "slopeAngle": "중간(Est.)",
+      "parking": "보통",
+      "congestion": "원활",
+      "lat": 37.176448,
+      "lng": 126.625107
+    },
+    {
+      "id": "mohanghang",
+      "name": "모항항(태안)",
+      "region": "충청 남부",
+      "obsCode": "DT_0017",
+      "minWaterLevelCm": 300,
+      "fee": "유료(15,000원/회)",
+      "availableStatus": "사용가능",
+      "operatorHours": "없음",
+      "slopeAngle": "중간(Est.)",
+      "parking": "보통",
+      "congestion": "원활",
+      "lat": 36.775993,
+      "lng": 126.133267
+    },
+    {
+      "id": "masian",
+      "name": "마시안 슬로프",
+      "region": "경기 남부",
+      "obsCode": "DT_0001",
+      "minWaterLevelCm": 100,
+      "fee": "무료",
+      "availableStatus": "미확인",
+      "operatorHours": "06:00~18:00",
+      "slopeAngle": "중간(Est.)",
+      "parking": "보통",
+      "congestion": "보통",
+      "lat": 37.441,
+      "lng": 126.356
+    }
+  ]
