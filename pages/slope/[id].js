@@ -23,27 +23,30 @@ async function getSunTimes(lat, lng) {
   try {
     const today = new Date();
     const dateStr = `${today.getFullYear()}-${(today.getMonth() + 1).toString().padStart(2, '0')}-${today.getDate().toString().padStart(2, '0')}`;
+    // 해당 슬로프 지역의 위도/경도를 사용하여 일출/일몰 시간 조회
     const url = `https://api.sunrise-sunset.org/json?lat=${lat}&lng=${lng}&date=${dateStr}&formatted=0`;
     const res = await fetch(url);
     const data = await res.json();
     
     if (data.status === 'OK' && data.results) {
-      // API는 UTC 시간을 반환하므로 한국 시간(KST, UTC+9)으로 변환
-      const sunrise = new Date(data.results.sunrise);
-      const sunset = new Date(data.results.sunset);
+      // API는 UTC 시간을 ISO 8601 형식으로 반환
+      const sunriseUTC = new Date(data.results.sunrise);
+      const sunsetUTC = new Date(data.results.sunset);
       
-      // 한국 시간으로 변환 (UTC+9)
+      // 한국 시간대(KST, UTC+9)로 변환
+      // UTC 시간에 9시간을 더하여 KST로 변환
       const kstOffset = 9 * 60 * 60 * 1000; // 9시간을 밀리초로
-      const sunriseKST = new Date(sunrise.getTime() + kstOffset);
-      const sunsetKST = new Date(sunset.getTime() + kstOffset);
+      const sunriseKST = new Date(sunriseUTC.getTime() + kstOffset);
+      const sunsetKST = new Date(sunsetUTC.getTime() + kstOffset);
       
-      // YYYY-MM-DD HH:mm 형식으로 변환 (로컬 시간 사용)
-      const formatKST = (date) => {
-        const y = date.getFullYear();
-        const m = (date.getMonth() + 1).toString().padStart(2, '0');
-        const d = date.getDate().toString().padStart(2, '0');
-        const h = date.getHours().toString().padStart(2, '0');
-        const min = date.getMinutes().toString().padStart(2, '0');
+      // YYYY-MM-DD HH:mm 형식으로 변환 (해당 슬로프 지역 기준 KST)
+      const formatKST = (kstDate) => {
+        // 이미 KST로 변환된 Date 객체에서 UTC 메서드를 사용하면 KST 시간이 추출됨
+        const y = kstDate.getUTCFullYear();
+        const m = (kstDate.getUTCMonth() + 1).toString().padStart(2, '0');
+        const d = kstDate.getUTCDate().toString().padStart(2, '0');
+        const h = kstDate.getUTCHours().toString().padStart(2, '0');
+        const min = kstDate.getUTCMinutes().toString().padStart(2, '0');
         return `${y}-${m}-${d} ${h}:${min}`;
       };
       
@@ -163,7 +166,7 @@ function findTideExtremes(data) {
   if (!data || data.length === 0) return [];
 
   const values = data.map((d) => Number(d.pre_value || d.real_value || 0));
-  const extremes = [];
+  let extremes = [];
 
   // 중간 지점에서 간조/만조 찾기 (로컬 최소값/최대값)
   for (let i = 1; i < values.length - 1; i++) {
@@ -223,7 +226,478 @@ function findTideExtremes(data) {
   // 시간순으로 정렬
   extremes.sort((a, b) => new Date(a.time) - new Date(b.time));
 
+  // 00:00에 해당하는 정보와 마지막 시간의 정보 제외
+  if (data.length > 0) {
+    const firstTime = data[0].record_time;
+    const lastTime = data[data.length - 1].record_time;
+    
+    // 0시인지 확인 (시간 부분이 00:00인지 체크)
+    const firstDate = new Date(firstTime.replace(' ', 'T'));
+    const isFirstMidnight = firstDate.getHours() === 0 && firstDate.getMinutes() === 0;
+    
+    extremes = extremes.filter((extreme) => {
+      // 0시에 해당하는 정보 제외
+      if (isFirstMidnight && extreme.time === firstTime) {
+        return false;
+      }
+      // 마지막 정보 제외
+      if (extreme.time === lastTime) {
+        return false;
+      }
+      return true;
+    });
+  }
+
   return extremes;
+}
+
+function TideChart({ tideData, tideExtremes, sunTimes, classified, minLevel, currentTime }) {
+  if (!tideData || tideData.length === 0) return null;
+
+  const graphWidth = 700;
+  const graphHeight = 250;
+  const padding = { top: 30, right: 20, bottom: 50, left: 40 };
+  const chartWidth = graphWidth - padding.left - padding.right;
+  const chartHeight = graphHeight - padding.top - padding.bottom;
+
+  const values = tideData.map((d) => Number(d.pre_value || d.real_value || 0));
+  const times = tideData.map((d) => d.record_time);
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const valueRange = maxValue - minValue || 1;
+  const valuePadding = valueRange * 0.1;
+
+  const startTime = new Date(times[0].replace(' ', 'T'));
+  const endTime = new Date(times[times.length - 1].replace(' ', 'T'));
+  const timeRange = endTime - startTime;
+
+  // 좌표 변환 함수
+  const getX = (timeStr) => {
+    const time = new Date(timeStr.replace(' ', 'T'));
+    const timeMs = time - startTime;
+    return (timeMs / timeRange) * chartWidth;
+  };
+
+  const getY = (value) => {
+    return chartHeight - ((value - minValue + valuePadding) / (valueRange + valuePadding * 2)) * chartHeight;
+  };
+
+  // 곡선 경로 생성 (부드러운 곡선 - Catmull-Rom 스플라인 기반)
+  const createSmoothPath = () => {
+    if (times.length < 2) return '';
+    
+    const points = times.map((time, idx) => ({
+      x: getX(time),
+      y: getY(values[idx])
+    }));
+
+    let path = `M ${points[0].x} ${points[0].y}`;
+    
+    if (points.length === 2) {
+      return `${path} L ${points[1].x} ${points[1].y}`;
+    }
+    
+    // Catmull-Rom 스플라인을 베지어 곡선으로 변환
+    for (let i = 0; i < points.length - 1; i++) {
+      const p0 = i > 0 ? points[i - 1] : points[i];
+      const p1 = points[i];
+      const p2 = points[i + 1];
+      const p3 = i < points.length - 2 ? points[i + 2] : points[i + 1];
+      
+      // Catmull-Rom 스플라인의 제어점 계산 (tension = 0.5)
+      const tension = 0.5;
+      
+      const cp1x = p1.x + (p2.x - p0.x) / 6 * tension;
+      const cp1y = p1.y + (p2.y - p0.y) / 6 * tension;
+      const cp2x = p2.x - (p3.x - p1.x) / 6 * tension;
+      const cp2y = p2.y - (p3.y - p1.y) / 6 * tension;
+      
+      path += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`;
+    }
+    
+    return path;
+  };
+  
+  const pathData = createSmoothPath();
+
+  // 이용가능 시간대 영역 계산 (초록/노랑/회색)
+  const availabilityAreas = [];
+  let currentAreaStart = null;
+  let currentAreaType = null;
+  
+  times.forEach((time, idx) => {
+    const type = classified[idx];
+    if (currentAreaType !== type) {
+      if (currentAreaStart !== null) {
+        availabilityAreas.push({
+          startX: getX(times[currentAreaStart]),
+          endX: getX(time),
+          type: currentAreaType
+        });
+      }
+      currentAreaStart = idx;
+      currentAreaType = type;
+    }
+  });
+  
+  if (currentAreaStart !== null) {
+    availabilityAreas.push({
+      startX: getX(times[currentAreaStart]),
+      endX: chartWidth,
+      type: currentAreaType
+    });
+  }
+
+  // 일출/일몰 위치
+  const sunriseX = sunTimes && times.length > 0
+    ? getTimePosition(sunTimes.sunrise, times[0], times[times.length - 1])
+    : null;
+  const sunsetX = sunTimes && times.length > 0
+    ? getTimePosition(sunTimes.sunset, times[0], times[times.length - 1])
+    : null;
+
+  // 현재 시각 위치 (대한민국 표준시 KST)
+  const now = currentTime;
+  const todayStr = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}-${now.getDate().toString().padStart(2, '0')}`;
+  const currentTimeStr = `${todayStr} ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+  const currentX = getTimePosition(currentTimeStr, times[0], times[times.length - 1]);
+
+  // Y축 눈금
+  const yTicks = 4;
+  const yTickValues = [];
+  for (let i = 0; i <= yTicks; i++) {
+    const value = minValue - valuePadding + (valueRange + valuePadding * 2) * (1 - i / yTicks);
+    yTickValues.push(Math.round(value));
+  }
+
+  const getAreaColor = (type) => {
+    if (type === 'good') return '#22c55e'; // 진한 초록색
+    if (type === 'caution') return '#facc15'; // 진한 노란색
+    return '#e5e7eb'; // 밝은 회색
+  };
+
+  return (
+    <div className="tide-chart-container">
+      <svg
+        width={graphWidth}
+        height={graphHeight}
+        viewBox={`0 0 ${graphWidth} ${graphHeight}`}
+        className="tide-chart"
+      >
+        <defs>
+          <linearGradient id="tideGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.2" />
+            <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.05" />
+          </linearGradient>
+          {/* 이용불가 영역 빗금 패턴 */}
+          <pattern
+            id="unavailablePattern"
+            x="0"
+            y="0"
+            width="10"
+            height="10"
+            patternUnits="userSpaceOnUse"
+          >
+            <path
+              d="M 0 10 L 10 0"
+              stroke="#9ca3af"
+              strokeWidth="1"
+              opacity="0.6"
+            />
+          </pattern>
+        </defs>
+
+        <g transform={`translate(${padding.left}, ${padding.top})`}>
+          {/* 이용가능 시간대 하이라이트 */}
+          {availabilityAreas.map((area, idx) => (
+            <g key={idx}>
+              {/* 배경색 */}
+              <rect
+                x={area.startX}
+                y={0}
+                width={area.endX - area.startX}
+                height={chartHeight}
+                fill={getAreaColor(area.type)}
+                opacity={area.type === 'bad' ? 0.4 : 0.6}
+              />
+              {/* 이용불가 영역에만 빗금 패턴 오버레이 */}
+              {area.type === 'bad' && (
+                <rect
+                  x={area.startX}
+                  y={0}
+                  width={area.endX - area.startX}
+                  height={chartHeight}
+                  fill="url(#unavailablePattern)"
+                  opacity="0.8"
+                />
+              )}
+            </g>
+          ))}
+
+          {/* 그리드선 */}
+          {yTickValues.map((value, idx) => {
+            const y = getY(value);
+            return (
+              <g key={idx}>
+                <line
+                  x1={0}
+                  y1={y}
+                  x2={chartWidth}
+                  y2={y}
+                  stroke="#e5e7eb"
+                  strokeWidth="1"
+                  strokeDasharray="2,2"
+                />
+                <text
+                  x={-8}
+                  y={y + 4}
+                  textAnchor="end"
+                  fontSize="10"
+                  fill="#6b7280"
+                >
+                  {value}
+                </text>
+              </g>
+            );
+          })}
+
+          {/* 곡선 영역 (그라데이션) */}
+          <path
+            d={`${pathData} L ${chartWidth} ${chartHeight} L 0 ${chartHeight} Z`}
+            fill="url(#tideGradient)"
+          />
+
+          {/* 조위 곡선 */}
+          <path
+            d={pathData}
+            fill="none"
+            stroke="#3b82f6"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+
+          {/* 최소 수위 기준선 */}
+          <line
+            x1={0}
+            y1={getY(minLevel)}
+            x2={chartWidth}
+            y2={getY(minLevel)}
+            stroke="#f59e0b"
+            strokeWidth="1.5"
+            strokeDasharray="4,4"
+            opacity="0.6"
+          />
+          {/* 최소 수위 라벨 */}
+          <g>
+            <rect
+              x={chartWidth - 120}
+              y={getY(minLevel) - 10}
+              width="115"
+              height="16"
+              rx="4"
+              fill="#ffffff"
+              stroke="#f59e0b"
+              strokeWidth="1.5"
+              opacity="0.95"
+            />
+            <text
+              x={chartWidth - 62}
+              y={getY(minLevel) - 1}
+              textAnchor="middle"
+              fontSize="10"
+              fill="#f59e0b"
+              fontWeight="600"
+            >
+              최소수위({minLevel}cm)
+            </text>
+          </g>
+
+          {/* 고조/저조 마커 */}
+          {tideExtremes.map((extreme, idx) => {
+            const x = getX(extreme.time);
+            const y = getY(extreme.value);
+            const isHigh = extreme.type === '만조';
+            return (
+              <g key={idx}>
+                <circle
+                  cx={x}
+                  cy={y}
+                  r="7"
+                  fill={isHigh ? '#dc2626' : '#2563eb'}
+                  stroke="#ffffff"
+                  strokeWidth="2"
+                />
+                <text
+                  x={x}
+                  y={y + 4}
+                  textAnchor="middle"
+                  fontSize="10"
+                  fontWeight="600"
+                  fill="#ffffff"
+                >
+                  {isHigh ? '고' : '저'}
+                </text>
+                <text
+                  x={x}
+                  y={y - 12}
+                  textAnchor="middle"
+                  fontSize="9"
+                  fill={isHigh ? '#dc2626' : '#2563eb'}
+                  fontWeight="600"
+                >
+                  {formatTimeLabel(extreme.time)}
+                </text>
+                <text
+                  x={x}
+                  y={y + 20}
+                  textAnchor="middle"
+                  fontSize="9"
+                  fill="#6b7280"
+                >
+                  {extreme.value}cm
+                </text>
+              </g>
+            );
+          })}
+
+          {/* 일출/일몰 표시 */}
+          {sunriseX !== null && (
+            <g>
+              <line
+                x1={(sunriseX / 100) * chartWidth}
+                y1={0}
+                x2={(sunriseX / 100) * chartWidth}
+                y2={chartHeight}
+                stroke="#f59e0b"
+                strokeWidth="1.5"
+                strokeDasharray="3,3"
+                opacity="0.6"
+              />
+              <text
+                x={(sunriseX / 100) * chartWidth}
+                y={-8}
+                textAnchor="middle"
+                fontSize="10"
+                fill="#f59e0b"
+                fontWeight="500"
+              >
+                일출 {formatTimeLabel(sunTimes.sunrise)}
+              </text>
+            </g>
+          )}
+          {sunsetX !== null && (
+            <g>
+              <line
+                x1={(sunsetX / 100) * chartWidth}
+                y1={0}
+                x2={(sunsetX / 100) * chartWidth}
+                y2={chartHeight}
+                stroke="#ea580c"
+                strokeWidth="1.5"
+                strokeDasharray="3,3"
+                opacity="0.6"
+              />
+              <text
+                x={(sunsetX / 100) * chartWidth}
+                y={-8}
+                textAnchor="middle"
+                fontSize="10"
+                fill="#ea580c"
+                fontWeight="500"
+              >
+                일몰 {formatTimeLabel(sunTimes.sunset)}
+              </text>
+            </g>
+          )}
+
+          {/* 현재 시각 표시 (대한민국 표준시 KST) */}
+          {currentX !== null && (
+            <g>
+              <line
+                x1={(currentX / 100) * chartWidth}
+                y1={0}
+                x2={(currentX / 100) * chartWidth}
+                y2={chartHeight}
+                stroke="#ffffff"
+                strokeWidth="2.5"
+              />
+              <polygon
+                points={`${(currentX / 100) * chartWidth},0 ${(currentX / 100) * chartWidth - 6},-8 ${(currentX / 100) * chartWidth + 6},-8`}
+                fill="#ffffff"
+              />
+              <text
+                x={(currentX / 100) * chartWidth}
+                y={-12}
+                textAnchor="middle"
+                fontSize="9"
+                fill="#111827"
+                fontWeight="600"
+              >
+                현재 시각
+              </text>
+            </g>
+          )}
+
+          {/* X축 시간 표시 (1시간 단위) */}
+          {(() => {
+            const startHour = startTime.getHours();
+            const endHour = endTime.getHours();
+            const hours = [];
+            // 1시간 단위로 모든 시간 표시
+            for (let h = startHour; h <= endHour + 1; h += 1) {
+              if (h >= 0 && h <= 24) {
+                const hourTime = new Date(startTime);
+                hourTime.setHours(h, 0, 0, 0);
+                if (hourTime >= startTime && hourTime <= endTime) {
+                  hours.push(h);
+                }
+              }
+            }
+            return hours.map((hour) => {
+              const hourTime = new Date(startTime);
+              hourTime.setHours(hour, 0, 0, 0);
+              const timeStr = `${hourTime.getFullYear()}-${(hourTime.getMonth() + 1).toString().padStart(2, '0')}-${hourTime.getDate().toString().padStart(2, '0')} ${hourTime.getHours().toString().padStart(2, '0')}:${hourTime.getMinutes().toString().padStart(2, '0')}`;
+              const x = getX(timeStr);
+              return (
+                <g key={hour}>
+                  <line
+                    x1={x}
+                    y1={chartHeight}
+                    x2={x}
+                    y2={chartHeight + 5}
+                    stroke="#6b7280"
+                    strokeWidth="1"
+                  />
+                  <text
+                    x={x}
+                    y={chartHeight + 18}
+                    textAnchor="middle"
+                    fontSize="10"
+                    fill="#6b7280"
+                  >
+                    {hour.toString().padStart(2, '0')}
+                  </text>
+                </g>
+              );
+            });
+          })()}
+
+          {/* Y축 라벨 */}
+          <text
+            x={-25}
+            y={chartHeight / 2}
+            textAnchor="middle"
+            fontSize="10"
+            fill="#6b7280"
+            transform={`rotate(-90, -25, ${chartHeight / 2})`}
+          >
+            조위 (cm)
+          </text>
+        </g>
+      </svg>
+    </div>
+  );
 }
 
 export default function SlopeDetail() {
@@ -237,6 +711,7 @@ export default function SlopeDetail() {
   const [updatedAt, setUpdatedAt] = useState(null);
   const [error, setError] = useState(null);
   const [sunTimes, setSunTimes] = useState(null);
+  const [currentTime, setCurrentTime] = useState(new Date());
 
   useEffect(() => {
     if (!slope) return;
@@ -278,6 +753,13 @@ export default function SlopeDetail() {
     };
 
     fetchSunTimes();
+
+    // 현재 시각 업데이트 (실시간, 1초마다 - 대한민국 표준시 KST)
+    const timeInterval = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+
+    return () => clearInterval(timeInterval);
   }, [slope]);
 
   if (!slope) {
@@ -293,15 +775,6 @@ export default function SlopeDetail() {
   const classified = classifyLevels(tideData || [], minLevel);
   const bestWindow = getBestWindow(tideData || [], minLevel);
   const summary = getSummaryStatus(bestWindow, minLevel);
-
-  // 일출/일몰 시간 위치 계산
-  const tideDataArray = tideData || [];
-  const sunrisePosition = sunTimes && tideDataArray.length > 0
-    ? getTimePosition(sunTimes.sunrise, tideDataArray[0].record_time, tideDataArray[tideDataArray.length - 1].record_time)
-    : null;
-  const sunsetPosition = sunTimes && tideDataArray.length > 0
-    ? getTimePosition(sunTimes.sunset, tideDataArray[0].record_time, tideDataArray[tideDataArray.length - 1].record_time)
-    : null;
 
   // 간조/만조 찾기 (시간순으로 정렬됨, 오늘 하루만)
   const tideExtremes = findTideExtremes(tideData || []);
@@ -386,68 +859,40 @@ export default function SlopeDetail() {
       <div className="section">
         <div className="section-title">슬로프 이용가능 시간대</div>
         <div className="tide-bar-container">
-          <div className="tide-bar-scale">
-            <span>00</span>
-            <span>03</span>
-            <span>06</span>
-            <span>09</span>
-            <span>12</span>
-            <span>15</span>
-            <span>18</span>
-            <span>21</span>
-          </div>
-          <div className="tide-bar" style={{ position: 'relative' }}>
-            {loading
-              ? Array.from({ length: 24 }).map((_, idx) => (
-                  <div
-                    key={idx}
-                    className="tide-bar-segment bad"
-                    style={{ opacity: 0.4 }}
-                  />
-                ))
-              : classified.map((cls, idx) => (
-                  <div
-                    key={idx}
-                    className={`tide-bar-segment ${cls}`}
-                  />
-                ))}
-            {sunrisePosition !== null && (
-              <div
-                className="sun-marker sunrise-marker"
-                style={{ left: `${sunrisePosition}%` }}
-              >
-                <div className="sun-marker-line" />
-                <div className="sun-marker-label sunrise-label">
-                  일출 {formatTimeLabel(sunTimes.sunrise)}
-                </div>
+          {loading ? (
+            <div style={{ fontSize: 13, color: '#9ca3af', textAlign: 'center', padding: '40px 0' }}>
+              조수 데이터를 불러오는 중...
+            </div>
+          ) : tideData && tideData.length > 0 ? (
+            <>
+              <TideChart
+                tideData={tideData}
+                tideExtremes={tideExtremes}
+                sunTimes={sunTimes}
+                classified={classified}
+                minLevel={minLevel}
+                currentTime={currentTime}
+              />
+              <div className="tide-legend">
+                <span>
+                  <span className="tide-legend-dot good" /> 초록 = 가능
+                </span>
+                <span>
+                  <span className="tide-legend-dot caution" /> 노랑 = 주의
+                </span>
+                <span>
+                  <span className="tide-legend-dot bad" /> 회색 = 불가
+                </span>
               </div>
-            )}
-            {sunsetPosition !== null && (
-              <div
-                className="sun-marker sunset-marker"
-                style={{ left: `${sunsetPosition}%` }}
-              >
-                <div className="sun-marker-line" />
-                <div className="sun-marker-label sunset-label">
-                  일몰 {formatTimeLabel(sunTimes.sunset)}
-                </div>
+              <div className="helper-text">
+                ※ 예상치 기반 정보로, 실제 현장 상황과 차이가 있을 수 있어요.
               </div>
-            )}
-          </div>
-          <div className="tide-legend">
-            <span>
-              <span className="tide-legend-dot good" /> 초록 = 가능
-            </span>
-            <span>
-              <span className="tide-legend-dot caution" /> 노랑 = 주의
-            </span>
-            <span>
-              <span className="tide-legend-dot bad" /> 회색 = 불가
-            </span>
-          </div>
-          <div className="helper-text">
-            ※ 예상치 기반 정보로, 실제 현장 상황과 차이가 있을 수 있어요.
-          </div>
+            </>
+          ) : (
+            <div style={{ fontSize: 13, color: '#9ca3af', textAlign: 'center', padding: '40px 0' }}>
+              조수 데이터가 없습니다.
+            </div>
+          )}
         </div>
       </div>
 
@@ -471,22 +916,25 @@ export default function SlopeDetail() {
       <div className="section">
         <div className="section-title">오늘 조수 요약</div>
         {tideExtremes.length > 0 ? (
-          <div style={{ fontSize: 13 }}>
+          <div className="tide-summary">
             {tideExtremes.map((extreme, idx) => (
-              <div key={idx} style={{ marginBottom: 4 }}>
-                • {extreme.type}:{' '}
-                <strong>
-                  {extreme.value}cm ({formatTimeLabel(extreme.time)})
-                </strong>
+              <div key={idx} className="tide-summary-item">
+                <div
+                  className={`tide-summary-circle ${
+                    extreme.type === '만조' ? 'high-tide' : 'low-tide'
+                  }`}
+                >
+                  {extreme.type === '만조' ? '고' : '저'}
+                </div>
+                <div className="tide-summary-content">
+                  <div className="tide-summary-time">
+                    {formatTimeLabel(extreme.time)}
+                  </div>
+                  <div className="tide-summary-value">{extreme.value}cm</div>
+                </div>
               </div>
             ))}
-            <div
-              style={{
-                marginTop: 8,
-                fontSize: 11,
-                color: '#6b7280'
-              }}
-            >
+            <div className="tide-summary-source">
               → "조수 데이터 출처: 국립해양조사원 조위관측소 실측·예측 조위
               Open API"
             </div>

@@ -97,6 +97,23 @@ a {
   margin-top: 8px;
 }
 
+/* 조위 곡선 그래프 */
+.tide-chart-container {
+  margin-top: 8px;
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  -webkit-overflow-scrolling: touch;
+}
+
+.tide-chart {
+  display: block;
+  width: 100%;
+  max-width: 700px;
+  height: auto;
+  min-width: 600px;
+}
+
 .tide-bar-scale {
   display: flex;
   justify-content: space-between;
@@ -191,4 +208,61 @@ a {
   display: flex;
   justify-content: space-between;
   padding: 4px 0;
+}
+
+/* 오늘 조수 요약 */
+.tide-summary {
+  font-size: 13px;
+}
+
+.tide-summary-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.tide-summary-circle {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.tide-summary-circle.high-tide {
+  background-color: #fee2e2;
+  color: #dc2626;
+}
+
+.tide-summary-circle.low-tide {
+  background-color: #dbeafe;
+  color: #2563eb;
+}
+
+.tide-summary-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tide-summary-time {
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.tide-summary-value {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.tide-summary-source {
+  margin-top: 12px;
+  font-size: 11px;
+  color: #6b7280;
 }
