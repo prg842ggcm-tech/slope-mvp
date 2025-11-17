@@ -19,10 +19,24 @@ function getTodayString() {
   return `${y}${m}${d}`;
 }
 
-async function getSunTimes(lat, lng) {
+function formatDateToString(date) {
+  const y = date.getFullYear();
+  const m = (date.getMonth() + 1).toString().padStart(2, '0');
+  const d = date.getDate().toString().padStart(2, '0');
+  return `${y}${m}${d}`;
+}
+
+function formatDateToInputValue(date) {
+  const y = date.getFullYear();
+  const m = (date.getMonth() + 1).toString().padStart(2, '0');
+  const d = date.getDate().toString().padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+async function getSunTimes(lat, lng, date = null) {
   try {
-    const today = new Date();
-    const dateStr = `${today.getFullYear()}-${(today.getMonth() + 1).toString().padStart(2, '0')}-${today.getDate().toString().padStart(2, '0')}`;
+    const targetDate = date || new Date();
+    const dateStr = `${targetDate.getFullYear()}-${(targetDate.getMonth() + 1).toString().padStart(2, '0')}-${targetDate.getDate().toString().padStart(2, '0')}`;
     // 해당 슬로프 지역의 위도/경도를 사용하여 일출/일몰 시간 조회
     const url = `https://api.sunrise-sunset.org/json?lat=${lat}&lng=${lng}&date=${dateStr}&formatted=0`;
     const res = await fetch(url);
@@ -251,7 +265,7 @@ function findTideExtremes(data) {
   return extremes;
 }
 
-function TideChart({ tideData, tideExtremes, sunTimes, classified, minLevel, currentTime }) {
+function TideChart({ tideData, tideExtremes, sunTimes, classified, minLevel, currentTime, selectedDate }) {
   if (!tideData || tideData.length === 0) return null;
 
   const graphWidth = 700;
@@ -356,11 +370,20 @@ function TideChart({ tideData, tideExtremes, sunTimes, classified, minLevel, cur
     ? getTimePosition(sunTimes.sunset, times[0], times[times.length - 1])
     : null;
 
-  // 현재 시각 위치 (대한민국 표준시 KST)
+  // 현재 시각 위치 (대한민국 표준시 KST) - 선택한 날짜가 오늘인 경우에만 표시
   const now = currentTime;
-  const todayStr = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}-${now.getDate().toString().padStart(2, '0')}`;
-  const currentTimeStr = `${todayStr} ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-  const currentX = getTimePosition(currentTimeStr, times[0], times[times.length - 1]);
+  const today = new Date();
+  const isToday = selectedDate && 
+    selectedDate.getFullYear() === today.getFullYear() &&
+    selectedDate.getMonth() === today.getMonth() &&
+    selectedDate.getDate() === today.getDate();
+  
+  let currentX = null;
+  if (isToday) {
+    const todayStr = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}-${now.getDate().toString().padStart(2, '0')}`;
+    const currentTimeStr = `${todayStr} ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+    currentX = getTimePosition(currentTimeStr, times[0], times[times.length - 1]);
+  }
 
   // Y축 눈금
   const yTicks = 4;
@@ -712,27 +735,63 @@ export default function SlopeDetail() {
   const [error, setError] = useState(null);
   const [sunTimes, setSunTimes] = useState(null);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [minLevel, setMinLevel] = useState(slope?.minWaterLevelCm || 300);
+  const [selectedDate, setSelectedDate] = useState(new Date());
 
   useEffect(() => {
     if (!slope) return;
+    
+    // slope가 변경되면 최소 수위도 초기화
+    setMinLevel(slope.minWaterLevelCm);
 
-    const fetchTide = async () => {
+    const fetchTide = async (date) => {
       setLoading(true);
       setError(null);
       try {
-        const today = getTodayString();
+        const dateString = formatDateToString(date);
+        console.log('요청 날짜 형식:', dateString, '관측소 코드:', slope.obsCode); // 디버깅용
         const res = await fetch(
-          `/api/tide?obsCode=${slope.obsCode}&date=${today}`
+          `/api/tide?obsCode=${slope.obsCode}&date=${dateString}`
         );
+        
+        // HTTP 응답 상태 확인
+        if (!res.ok) {
+          const errorText = await res.text();
+          console.error('API 응답 오류:', res.status, errorText);
+          setError(`서버 오류 (${res.status}): 데이터를 불러오지 못했습니다.`);
+          setTideData(null);
+          return;
+        }
+        
         const json = await res.json();
+        console.log('API 응답 데이터:', json); // 디버깅용
+        
+        // 에러 확인 (여러 위치에서 올 수 있음)
         if (json.error) {
-          setError(json.error);
+          const errorMsg = json.error === 'No search data' ? '해당 날짜의 조위 데이터를 찾을 수 없습니다.' : json.error;
+          setError(errorMsg);
+          setTideData(null);
+        } else if (json.result?.error) {
+          // result 안에 error가 있는 경우
+          const errorMsg = json.result.error === 'No search data' ? '해당 날짜의 조위 데이터를 찾을 수 없습니다.' : json.result.error;
+          setError(errorMsg);
           setTideData(null);
         } else {
-          setTideData(json.result?.data || []);
+          // 다양한 응답 구조 지원
+          const data = json.result?.data || json.data || (Array.isArray(json.result) ? json.result : []);
+          console.log('추출된 조위 데이터:', data); // 디버깅용
+          
+          if (Array.isArray(data) && data.length > 0) {
+            setTideData(data);
+          } else {
+            console.warn('조위 데이터가 비어있거나 배열이 아닙니다:', data);
+            setError('조위 데이터가 없습니다. (해당 날짜의 데이터가 없을 수 있습니다)');
+            setTideData(null);
+          }
         }
       } catch (e) {
-        setError('데이터를 불러오지 못했습니다.');
+        console.error('조위 데이터 가져오기 오류:', e);
+        setError(`데이터를 불러오지 못했습니다: ${e.message}`);
         setTideData(null);
       } finally {
         setLoading(false);
@@ -742,12 +801,12 @@ export default function SlopeDetail() {
       }
     };
 
-    fetchTide();
+    fetchTide(selectedDate);
 
     // 일출/일몰 시간 가져오기
     const fetchSunTimes = async () => {
       if (slope.lat && slope.lng) {
-        const times = await getSunTimes(slope.lat, slope.lng);
+        const times = await getSunTimes(slope.lat, slope.lng, selectedDate);
         setSunTimes(times);
       }
     };
@@ -760,7 +819,7 @@ export default function SlopeDetail() {
     }, 1000);
 
     return () => clearInterval(timeInterval);
-  }, [slope]);
+  }, [slope, selectedDate]);
 
   if (!slope) {
     return (
@@ -771,7 +830,6 @@ export default function SlopeDetail() {
     );
   }
 
-  const minLevel = slope.minWaterLevelCm;
   const classified = classifyLevels(tideData || [], minLevel);
   const bestWindow = getBestWindow(tideData || [], minLevel);
   const summary = getSummaryStatus(bestWindow, minLevel);
@@ -824,40 +882,52 @@ export default function SlopeDetail() {
         </button>
       </div>
 
-      {/* 현재 가용 여부 */}
-      <div className="section">
-        <div className="section-title">현재 가용 여부</div>
-        <div className="status-pill" style={{ backgroundColor: '#ecfdf3' }}>
-          <span
-            className="status-dot"
-            style={{ backgroundColor: statusColor }}
-          />
-          <span>{summary.label}</span>
-          {bestWindow && (
-            <span style={{ fontSize: 12, color: '#4b5563' }}>
-              ({summary.detail})
-            </span>
-          )}
-        </div>
-        <div className="status-meta">
-          Est. · Tide API · Updated {updatedAt || '--:--'}
-        </div>
-        {error && (
-          <div
-            style={{
-              marginTop: 4,
-              fontSize: 12,
-              color: '#b91c1c'
-            }}
-          >
-            {error}
-          </div>
-        )}
-      </div>
-
       {/* 슬로프 이용가능 시간대 */}
       <div className="section">
         <div className="section-title">슬로프 이용가능 시간대</div>
+        <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+          <label style={{ fontSize: 13, color: '#6b7280', fontWeight: 500 }}>
+            조회 날짜:
+          </label>
+          <input
+            type="date"
+            value={formatDateToInputValue(selectedDate)}
+            onChange={(e) => {
+              if (e.target.value) {
+                setSelectedDate(new Date(e.target.value));
+              }
+            }}
+            style={{
+              padding: '6px 10px',
+              border: '1px solid #d1d5db',
+              borderRadius: '6px',
+              fontSize: '13px',
+              backgroundColor: '#ffffff',
+              cursor: 'pointer'
+            }}
+          />
+          <button
+            onClick={() => setSelectedDate(new Date())}
+            style={{
+              padding: '6px 12px',
+              fontSize: '12px',
+              border: '1px solid #d1d5db',
+              borderRadius: '6px',
+              backgroundColor: '#f9fafb',
+              color: '#6b7280',
+              cursor: 'pointer',
+              fontWeight: 500
+            }}
+            onMouseOver={(e) => {
+              e.target.style.backgroundColor = '#f3f4f6';
+            }}
+            onMouseOut={(e) => {
+              e.target.style.backgroundColor = '#f9fafb';
+            }}
+          >
+            오늘
+          </button>
+        </div>
         <div className="tide-bar-container">
           {loading ? (
             <div style={{ fontSize: 13, color: '#9ca3af', textAlign: 'center', padding: '40px 0' }}>
@@ -872,6 +942,7 @@ export default function SlopeDetail() {
                 classified={classified}
                 minLevel={minLevel}
                 currentTime={currentTime}
+                selectedDate={selectedDate}
               />
               <div className="tide-legend">
                 <span>
@@ -887,11 +958,41 @@ export default function SlopeDetail() {
               <div className="helper-text">
                 ※ 예상치 기반 정보로, 실제 현장 상황과 차이가 있을 수 있어요.
               </div>
+              <div className="status-meta" style={{ marginTop: 8 }}>
+                Est. · Tide API · Updated {updatedAt || '--:--'}
+              </div>
+              {error && (
+                <div
+                  style={{
+                    marginTop: 4,
+                    fontSize: 12,
+                    color: '#b91c1c'
+                  }}
+                >
+                  {error}
+                </div>
+              )}
             </>
           ) : (
-            <div style={{ fontSize: 13, color: '#9ca3af', textAlign: 'center', padding: '40px 0' }}>
-              조수 데이터가 없습니다.
-            </div>
+            <>
+              <div style={{ fontSize: 13, color: '#9ca3af', textAlign: 'center', padding: '40px 0' }}>
+                조수 데이터가 없습니다.
+              </div>
+              <div className="status-meta" style={{ marginTop: 8 }}>
+                Est. · Tide API · Updated {updatedAt || '--:--'}
+              </div>
+              {error && (
+                <div
+                  style={{
+                    marginTop: 4,
+                    fontSize: 12,
+                    color: '#b91c1c'
+                  }}
+                >
+                  {error}
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -901,7 +1002,62 @@ export default function SlopeDetail() {
         <div className="section-title">슬로프 정보</div>
         <div className="info-list">
           <div>• 지역: {slope.region}</div>
-          <div>• 최소 수위: {slope.minWaterLevelCm}cm</div>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+              <span>• 최소 수위:</span>
+              <input
+                type="number"
+                value={minLevel}
+                onChange={(e) => {
+                  const value = parseInt(e.target.value, 10);
+                  if (!isNaN(value) && value >= 100) {
+                    setMinLevel(value);
+                  }
+                }}
+                onBlur={(e) => {
+                  const value = parseInt(e.target.value, 10);
+                  if (isNaN(value) || value < 100) {
+                    setMinLevel(100);
+                  }
+                }}
+                style={{
+                  width: '80px',
+                  padding: '4px 8px',
+                  border: '1px solid #d1d5db',
+                  borderRadius: '4px',
+                  fontSize: '13px',
+                  textAlign: 'right'
+                }}
+                min="100"
+              />
+              <span>cm</span>
+              {minLevel !== slope.minWaterLevelCm && (
+                <button
+                  onClick={() => setMinLevel(slope.minWaterLevelCm)}
+                  style={{
+                    padding: '4px 8px',
+                    fontSize: '11px',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '4px',
+                    backgroundColor: '#f9fafb',
+                    color: '#6b7280',
+                    cursor: 'pointer'
+                  }}
+                  onMouseOver={(e) => {
+                    e.target.style.backgroundColor = '#f3f4f6';
+                  }}
+                  onMouseOut={(e) => {
+                    e.target.style.backgroundColor = '#f9fafb';
+                  }}
+                >
+                  초기화
+                </button>
+              )}
+            </div>
+            <div style={{ fontSize: '11px', color: '#6b7280', marginLeft: '20px', marginTop: '2px' }}>
+              자신의 보트에 맞게 최소 수위를 조절하세요.
+            </div>
+          </div>
           <div>• 이용료: {slope.fee}</div>
           <div>• 사용가능여부: {slope.availableStatus}</div>
           <div>• 경사/노출: {slope.slopeAngle}</div>
