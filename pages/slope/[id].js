@@ -575,6 +575,73 @@ function TideChart({ tideData, tideExtremes, sunTimes, classified, minLevel, cur
             </text>
           </g>
 
+          {/* 현재 시각 표시 */}
+          {(() => {
+            // 선택한 날짜가 오늘인지 확인
+            const today = new Date();
+            const isToday = selectedDate.getFullYear() === today.getFullYear() &&
+                           selectedDate.getMonth() === today.getMonth() &&
+                           selectedDate.getDate() === today.getDate();
+            
+            if (!isToday || !currentTime) return null;
+            
+            // 현재 시각이 그래프 범위 내에 있는지 확인
+            const currentTimeStr = `${selectedDate.getFullYear()}-${(selectedDate.getMonth() + 1).toString().padStart(2, '0')}-${selectedDate.getDate().toString().padStart(2, '0')} ${currentTime.getHours().toString().padStart(2, '0')}:${currentTime.getMinutes().toString().padStart(2, '0')}:${currentTime.getSeconds().toString().padStart(2, '0')}`;
+            const currentTimeDate = new Date(currentTimeStr.replace(' ', 'T'));
+            
+            if (currentTimeDate < graphStartTime || currentTimeDate > graphEndTime) {
+              return null;
+            }
+            
+            const currentX = getX(currentTimeStr);
+            const currentHours = currentTime.getHours().toString().padStart(2, '0');
+            const currentMinutes = currentTime.getMinutes().toString().padStart(2, '0');
+            const currentSeconds = currentTime.getSeconds().toString().padStart(2, '0');
+            
+            return (
+              <g>
+                {/* 현재 시각 세로선 */}
+                <line
+                  x1={currentX}
+                  y1={0}
+                  x2={currentX}
+                  y2={chartHeight}
+                  stroke="#ef4444"
+                  strokeWidth="3"
+                  strokeDasharray="4 4"
+                />
+                {/* 위쪽 화살표 */}
+                <polygon
+                  points={`${currentX},0 ${currentX - 6},12 ${currentX + 6},12`}
+                  fill="#ef4444"
+                />
+                {/* 현재 시각 라벨 */}
+                <g>
+                  <rect
+                    x={currentX - 35}
+                    y={-25}
+                    width="70"
+                    height="18"
+                    rx="4"
+                    fill="#ffffff"
+                    stroke="#ef4444"
+                    strokeWidth="2"
+                  />
+                  <text
+                    x={currentX}
+                    y={-12}
+                    textAnchor="middle"
+                    fontSize="10"
+                    fill="#ef4444"
+                    fontWeight="700"
+                  >
+                    {currentHours}:{currentMinutes}:{currentSeconds}
+                  </text>
+                </g>
+              </g>
+            );
+          })()}
+
           {/* 고조/저조 마커 */}
           {tideExtremes.map((extreme, idx) => {
             const x = getX(extreme.time);
@@ -741,6 +808,7 @@ export default function SlopeDetail() {
   const [minLevel, setMinLevel] = useState(slope?.minWaterLevelCm || 300);
   const [minLevelInput, setMinLevelInput] = useState(String(slope?.minWaterLevelCm || 300));
   const [selectedDate, setSelectedDate] = useState(new Date());
+  const [waterTemp, setWaterTemp] = useState(null);
 
   useEffect(() => {
     if (!slope) return;
@@ -890,6 +958,56 @@ export default function SlopeDetail() {
 
     fetchSunTimes();
 
+    // 수온 데이터 가져오기 (오늘 날짜 기준)
+    const fetchWaterTemp = async () => {
+      if (!slope.obsCode) return;
+      
+      try {
+        const today = new Date();
+        const dateString = formatDateToString(today);
+        const res = await fetch(
+          `/api/waterTemp?obsCode=${slope.obsCode}&date=${dateString}`
+        );
+        
+        if (!res.ok) {
+          console.error('수온 API 응답 오류:', res.status);
+          return;
+        }
+        
+        const json = await res.json();
+        
+        if (json.error || json.result?.error) {
+          console.warn('수온 데이터 없음:', json.error || json.result?.error);
+          setWaterTemp(null);
+          return;
+        }
+        
+        const allData = json.result?.data || json.data || [];
+        
+        if (Array.isArray(allData) && allData.length > 0) {
+          // 최신 수온 데이터 찾기 (시간순 정렬 후 마지막 값)
+          const sortedData = [...allData].sort((a, b) => {
+            if (!a.record_time || !b.record_time) return 0;
+            return a.record_time.localeCompare(b.record_time);
+          });
+          
+          // 가장 최근 데이터 사용
+          const latestData = sortedData[sortedData.length - 1];
+          if (latestData && latestData.water_temp) {
+            setWaterTemp({
+              value: Number(latestData.water_temp),
+              time: latestData.record_time
+            });
+          }
+        }
+      } catch (e) {
+        console.error('수온 데이터 가져오기 오류:', e);
+        setWaterTemp(null);
+      }
+    };
+
+    fetchWaterTemp();
+
     // 현재 시각 업데이트 (실시간, 1초마다 - 대한민국 표준시 KST)
     const timeInterval = setInterval(() => {
       setCurrentTime(new Date());
@@ -966,6 +1084,37 @@ export default function SlopeDetail() {
           <label style={{ fontSize: 13, color: '#6b7280', fontWeight: 500 }}>
             조회 날짜:
           </label>
+          <button
+            onClick={() => {
+              const prevDate = new Date(selectedDate);
+              prevDate.setDate(prevDate.getDate() - 1);
+              setSelectedDate(prevDate);
+            }}
+            style={{
+              padding: '6px 10px',
+              fontSize: '14px',
+              border: '1px solid #d1d5db',
+              borderRadius: '6px',
+              backgroundColor: '#ffffff',
+              color: '#374151',
+              cursor: 'pointer',
+              fontWeight: 600,
+              transition: 'all 0.2s',
+              minWidth: '36px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+            onMouseOver={(e) => {
+              e.target.style.backgroundColor = '#f3f4f6';
+            }}
+            onMouseOut={(e) => {
+              e.target.style.backgroundColor = '#ffffff';
+            }}
+            aria-label="이전 날짜"
+          >
+            &lt;
+          </button>
           <input
             type="date"
             value={formatDateToInputValue(selectedDate)}
@@ -980,9 +1129,41 @@ export default function SlopeDetail() {
               borderRadius: '6px',
               fontSize: '13px',
               backgroundColor: '#ffffff',
+              color: '#1f2937',
               cursor: 'pointer'
             }}
           />
+          <button
+            onClick={() => {
+              const nextDate = new Date(selectedDate);
+              nextDate.setDate(nextDate.getDate() + 1);
+              setSelectedDate(nextDate);
+            }}
+            style={{
+              padding: '6px 10px',
+              fontSize: '14px',
+              border: '1px solid #d1d5db',
+              borderRadius: '6px',
+              backgroundColor: '#ffffff',
+              color: '#374151',
+              cursor: 'pointer',
+              fontWeight: 600,
+              transition: 'all 0.2s',
+              minWidth: '36px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+            onMouseOver={(e) => {
+              e.target.style.backgroundColor = '#f3f4f6';
+            }}
+            onMouseOut={(e) => {
+              e.target.style.backgroundColor = '#ffffff';
+            }}
+            aria-label="다음 날짜"
+          >
+            &gt;
+          </button>
           <button
             onClick={() => setSelectedDate(new Date())}
             style={{
@@ -1079,6 +1260,9 @@ export default function SlopeDetail() {
         <div className="section-title">슬로프 정보</div>
         <div className="info-list">
           <div>• 지역: {slope.region}</div>
+          {waterTemp && (
+            <div>• 수온: {waterTemp.value.toFixed(1)}℃ {waterTemp.time && `(${formatTimeLabel(waterTemp.time)})`}</div>
+          )}
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
               <span>• 최소 수위:</span>

@@ -4,7 +4,7 @@
       "name": "제부마리나",
       "region": "경기 남부",
       "obsCode": "DT_0008",
-      "minWaterLevelCm": 300,
+      "minWaterLevelCm": 150,
       "fee": "유료(2만원)",
       "availableStatus": "사용가능",
       "operatorHours": "09:00~21:00",
