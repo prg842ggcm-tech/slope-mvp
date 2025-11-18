@@ -95,9 +95,9 @@ function getTimePosition(timeStr, dataStartTime, dataEndTime) {
 function classifyLevels(data, minLevel) {
   if (!data || data.length === 0) return [];
 
-  // 24시간 가정 (실제는 더 많을 수도 있지만 MVP로 단순화)
+  // 예측 조위만 사용 (tide_level 또는 pre_value) - 예측 조위 전용 API 사용
   return data.map((item) => {
-    const value = Number(item.pre_value || item.real_value || 0);
+    const value = Number(item.tide_level || item.pre_value || 0);
     if (value >= minLevel + 20) return 'good';
     if (value >= minLevel) return 'caution';
     return 'bad';
@@ -107,7 +107,8 @@ function classifyLevels(data, minLevel) {
 function getBestWindow(data, minLevel) {
   if (!data || data.length === 0) return null;
 
-  const levels = data.map((item) => Number(item.pre_value || item.real_value || 0));
+  // 예측 조위만 사용 (tide_level 또는 pre_value) - 예측 조위 전용 API 사용
+  const levels = data.map((item) => Number(item.tide_level || item.pre_value || 0));
   const times = data.map((item) => item.record_time);
 
   let bestStartIdx = -1;
@@ -179,7 +180,8 @@ function getSummaryStatus(window, minLevel) {
 function findTideExtremes(data) {
   if (!data || data.length === 0) return [];
 
-  const values = data.map((d) => Number(d.pre_value || d.real_value || 0));
+  // 예측 조위만 사용 (tide_level 또는 pre_value) - 예측 조위 전용 API 사용
+  const values = data.map((d) => Number(d.tide_level || d.pre_value || 0));
   let extremes = [];
 
   // 중간 지점에서 간조/만조 찾기 (로컬 최소값/최대값)
@@ -274,21 +276,25 @@ function TideChart({ tideData, tideExtremes, sunTimes, classified, minLevel, cur
   const chartWidth = graphWidth - padding.left - padding.right;
   const chartHeight = graphHeight - padding.top - padding.bottom;
 
-  const values = tideData.map((d) => Number(d.pre_value || d.real_value || 0));
+  // 예측 조위만 사용 (tide_level 또는 pre_value) - 예측 조위 전용 API 사용
+  const values = tideData.map((d) => Number(d.tide_level || d.pre_value || 0));
   const times = tideData.map((d) => d.record_time);
   const minValue = Math.min(...values);
   const maxValue = Math.max(...values);
   const valueRange = maxValue - minValue || 1;
   const valuePadding = valueRange * 0.1;
 
-  const startTime = new Date(times[0].replace(' ', 'T'));
-  const endTime = new Date(times[times.length - 1].replace(' ', 'T'));
-  const timeRange = endTime - startTime;
+  // 선택한 날짜의 0시부터 24시까지를 그래프 범위로 설정 (전체 24시간)
+  const graphStartTime = new Date(selectedDate);
+  graphStartTime.setHours(0, 0, 0, 0);
+  const graphEndTime = new Date(selectedDate);
+  graphEndTime.setHours(24, 0, 0, 0);
+  const timeRange = graphEndTime - graphStartTime; // 24시간 = 86400000ms
 
-  // 좌표 변환 함수
+  // 좌표 변환 함수 (0시~24시 기준)
   const getX = (timeStr) => {
     const time = new Date(timeStr.replace(' ', 'T'));
-    const timeMs = time - startTime;
+    const timeMs = time - graphStartTime;
     return (timeMs / timeRange) * chartWidth;
   };
 
@@ -346,7 +352,9 @@ function TideChart({ tideData, tideExtremes, sunTimes, classified, minLevel, cur
         availabilityAreas.push({
           startX: getX(times[currentAreaStart]),
           endX: getX(time),
-          type: currentAreaType
+          type: currentAreaType,
+          startTime: times[currentAreaStart],
+          endTime: time
         });
       }
       currentAreaStart = idx;
@@ -358,32 +366,21 @@ function TideChart({ tideData, tideExtremes, sunTimes, classified, minLevel, cur
     availabilityAreas.push({
       startX: getX(times[currentAreaStart]),
       endX: chartWidth,
-      type: currentAreaType
+      type: currentAreaType,
+      startTime: times[currentAreaStart],
+      endTime: times[times.length - 1] || times[currentAreaStart]
     });
   }
 
-  // 일출/일몰 위치
-  const sunriseX = sunTimes && times.length > 0
-    ? getTimePosition(sunTimes.sunrise, times[0], times[times.length - 1])
+  // 일출/일몰 위치 (그래프 범위 기준: 0시~24시)
+  const dateStr = `${selectedDate.getFullYear()}-${(selectedDate.getMonth() + 1).toString().padStart(2, '0')}-${selectedDate.getDate().toString().padStart(2, '0')}`;
+  const sunriseX = sunTimes
+    ? getTimePosition(sunTimes.sunrise, dateStr + ' 00:00', dateStr + ' 24:00')
     : null;
-  const sunsetX = sunTimes && times.length > 0
-    ? getTimePosition(sunTimes.sunset, times[0], times[times.length - 1])
+  const sunsetX = sunTimes
+    ? getTimePosition(sunTimes.sunset, dateStr + ' 00:00', dateStr + ' 24:00')
     : null;
 
-  // 현재 시각 위치 (대한민국 표준시 KST) - 선택한 날짜가 오늘인 경우에만 표시
-  const now = currentTime;
-  const today = new Date();
-  const isToday = selectedDate && 
-    selectedDate.getFullYear() === today.getFullYear() &&
-    selectedDate.getMonth() === today.getMonth() &&
-    selectedDate.getDate() === today.getDate();
-  
-  let currentX = null;
-  if (isToday) {
-    const todayStr = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}-${now.getDate().toString().padStart(2, '0')}`;
-    const currentTimeStr = `${todayStr} ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-    currentX = getTimePosition(currentTimeStr, times[0], times[times.length - 1]);
-  }
 
   // Y축 눈금
   const yTicks = 4;
@@ -432,30 +429,72 @@ function TideChart({ tideData, tideExtremes, sunTimes, classified, minLevel, cur
 
         <g transform={`translate(${padding.left}, ${padding.top})`}>
           {/* 이용가능 시간대 하이라이트 */}
-          {availabilityAreas.map((area, idx) => (
-            <g key={idx}>
-              {/* 배경색 */}
-              <rect
-                x={area.startX}
-                y={0}
-                width={area.endX - area.startX}
-                height={chartHeight}
-                fill={getAreaColor(area.type)}
-                opacity={area.type === 'bad' ? 0.4 : 0.6}
-              />
-              {/* 이용불가 영역에만 빗금 패턴 오버레이 */}
-              {area.type === 'bad' && (
+          {availabilityAreas.map((area, idx) => {
+            const areaWidth = area.endX - area.startX;
+            const centerX = area.startX + areaWidth / 2;
+            const isGoodOrCaution = area.type === 'good' || area.type === 'caution';
+            
+            // 시간 형식 변환 함수
+            const formatTimeForLabel = (timeStr) => {
+              if (!timeStr) return '';
+              // "2025-11-18 10:00" 형식에서 시간 부분만 추출
+              const timePart = timeStr.split(' ')[1] || timeStr;
+              return timePart.substring(0, 5); // HH:MM 형식
+            };
+            
+            return (
+              <g key={idx}>
+                {/* 배경색 */}
                 <rect
                   x={area.startX}
                   y={0}
-                  width={area.endX - area.startX}
+                  width={areaWidth}
                   height={chartHeight}
-                  fill="url(#unavailablePattern)"
-                  opacity="0.8"
+                  fill={getAreaColor(area.type)}
+                  opacity={area.type === 'bad' ? 0.4 : 0.6}
                 />
-              )}
-            </g>
-          ))}
+                {/* 이용불가 영역에만 빗금 패턴 오버레이 */}
+                {area.type === 'bad' && (
+                  <rect
+                    x={area.startX}
+                    y={0}
+                    width={areaWidth}
+                    height={chartHeight}
+                    fill="url(#unavailablePattern)"
+                    opacity="0.8"
+                  />
+                )}
+                {/* 초록색/노랑색 구간에 시간 라벨 표시 */}
+                {isGoodOrCaution && area.startTime && area.endTime && areaWidth > 40 && (
+                  <g>
+                    {/* 배경 박스 */}
+                    <rect
+                      x={centerX - 35}
+                      y={chartHeight / 2 - 10}
+                      width="70"
+                      height="20"
+                      rx="4"
+                      fill="#ffffff"
+                      stroke={getAreaColor(area.type)}
+                      strokeWidth="2"
+                      opacity="0.95"
+                    />
+                    {/* 시간 텍스트 */}
+                    <text
+                      x={centerX}
+                      y={chartHeight / 2 + 4}
+                      textAnchor="middle"
+                      fontSize="10"
+                      fill={area.type === 'good' ? '#15803d' : '#a16207'}
+                      fontWeight="700"
+                    >
+                      {formatTimeForLabel(area.startTime)}~{formatTimeForLabel(area.endTime)}
+                    </text>
+                  </g>
+                )}
+              </g>
+            );
+          })}
 
           {/* 그리드선 */}
           {yTickValues.map((value, idx) => {
@@ -634,51 +673,15 @@ function TideChart({ tideData, tideExtremes, sunTimes, classified, minLevel, cur
             </g>
           )}
 
-          {/* 현재 시각 표시 (대한민국 표준시 KST) */}
-          {currentX !== null && (
-            <g>
-              <line
-                x1={(currentX / 100) * chartWidth}
-                y1={0}
-                x2={(currentX / 100) * chartWidth}
-                y2={chartHeight}
-                stroke="#ffffff"
-                strokeWidth="2.5"
-              />
-              <polygon
-                points={`${(currentX / 100) * chartWidth},0 ${(currentX / 100) * chartWidth - 6},-8 ${(currentX / 100) * chartWidth + 6},-8`}
-                fill="#ffffff"
-              />
-              <text
-                x={(currentX / 100) * chartWidth}
-                y={-12}
-                textAnchor="middle"
-                fontSize="9"
-                fill="#111827"
-                fontWeight="600"
-              >
-                현재 시각
-              </text>
-            </g>
-          )}
-
-          {/* X축 시간 표시 (1시간 단위) */}
+          {/* X축 시간 표시 (1시간 단위) - 0시부터 24시까지 모두 표시 */}
           {(() => {
-            const startHour = startTime.getHours();
-            const endHour = endTime.getHours();
             const hours = [];
-            // 1시간 단위로 모든 시간 표시
-            for (let h = startHour; h <= endHour + 1; h += 1) {
-              if (h >= 0 && h <= 24) {
-                const hourTime = new Date(startTime);
-                hourTime.setHours(h, 0, 0, 0);
-                if (hourTime >= startTime && hourTime <= endTime) {
-                  hours.push(h);
-                }
-              }
+            // 0시부터 24시까지 1시간 단위로 모든 시간 표시
+            for (let h = 0; h <= 24; h += 1) {
+              hours.push(h);
             }
             return hours.map((hour) => {
-              const hourTime = new Date(startTime);
+              const hourTime = new Date(selectedDate);
               hourTime.setHours(hour, 0, 0, 0);
               const timeStr = `${hourTime.getFullYear()}-${(hourTime.getMonth() + 1).toString().padStart(2, '0')}-${hourTime.getDate().toString().padStart(2, '0')} ${hourTime.getHours().toString().padStart(2, '0')}:${hourTime.getMinutes().toString().padStart(2, '0')}`;
               const x = getX(timeStr);
@@ -736,6 +739,7 @@ export default function SlopeDetail() {
   const [sunTimes, setSunTimes] = useState(null);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [minLevel, setMinLevel] = useState(slope?.minWaterLevelCm || 300);
+  const [minLevelInput, setMinLevelInput] = useState(String(slope?.minWaterLevelCm || 300));
   const [selectedDate, setSelectedDate] = useState(new Date());
 
   useEffect(() => {
@@ -743,6 +747,7 @@ export default function SlopeDetail() {
     
     // slope가 변경되면 최소 수위도 초기화
     setMinLevel(slope.minWaterLevelCm);
+    setMinLevelInput(String(slope.minWaterLevelCm));
 
     const fetchTide = async (date) => {
       setLoading(true);
@@ -778,13 +783,85 @@ export default function SlopeDetail() {
           setTideData(null);
         } else {
           // 다양한 응답 구조 지원
-          const data = json.result?.data || json.data || (Array.isArray(json.result) ? json.result : []);
-          console.log('추출된 조위 데이터:', data); // 디버깅용
+          const allData = json.result?.data || json.data || (Array.isArray(json.result) ? json.result : []);
+          console.log('API 원본 데이터:', allData.length, '개'); // 디버깅용
           
-          if (Array.isArray(data) && data.length > 0) {
-            setTideData(data);
+          if (Array.isArray(allData) && allData.length > 0) {
+            // 예측 조위 전용 API (tideObsPre) 사용
+            // API 응답 필드: tide_level (예측 조위), record_time (관측시간)
+            // 1분 단위 데이터이므로 1시간 단위로 집계하거나 그대로 사용
+            const tideData = allData.filter((item) => {
+              // tide_level이 존재하고 유효한 값인지 확인 (예측 조위 전용 API)
+              // 기존 API 호환을 위해 pre_value도 확인
+              const value = item.tide_level || item.pre_value;
+              return value !== null && 
+                     value !== undefined && 
+                     value !== '' &&
+                     !isNaN(Number(value));
+            });
+            
+            console.log('예측 조위 데이터 (tideObsPre API):', {
+              전체개수: allData.length,
+              예측조위개수: tideData.length,
+              첫번째시간: tideData[0]?.record_time,
+              마지막시간: tideData[tideData.length - 1]?.record_time,
+              샘플데이터: tideData.slice(0, 3).map(d => ({
+                time: d.record_time,
+                tide_level: d.tide_level || d.pre_value
+              }))
+            });
+            
+            if (tideData.length === 0) {
+              console.error('❌ 예측 조위 데이터가 없습니다!');
+              setError('예측 조위 데이터를 찾을 수 없습니다.');
+              setTideData(null);
+              return;
+            }
+            
+            // 시간순으로 정렬
+            const sortedData = [...tideData].sort((a, b) => {
+              if (!a.record_time || !b.record_time) return 0;
+              return a.record_time.localeCompare(b.record_time);
+            });
+            
+            // 1분 단위 데이터를 1시간 단위로 집계 (그래프 표시를 위해)
+            // 매 시간 정각(00분) 데이터만 사용하거나, 시간별 평균 사용
+            const hourlyData = [];
+            const hourMap = new Map();
+            
+            sortedData.forEach((item) => {
+              if (!item.record_time) return;
+              
+              // record_time 형식: "2016-01-01 00:00:00" 또는 "2016-01-01 00:00"
+              const timeStr = item.record_time.replace(' ', 'T');
+              const date = new Date(timeStr);
+              const hour = date.getHours();
+              const minute = date.getMinutes();
+              
+              // 정각(00분) 데이터만 사용하거나, 첫 번째 데이터 사용
+              if (minute === 0 || !hourMap.has(hour)) {
+                const value = Number(item.tide_level || item.pre_value || 0);
+                hourMap.set(hour, {
+                  record_time: `${item.record_time.split(' ')[0]} ${hour.toString().padStart(2, '0')}:00`,
+                  pre_value: value,
+                  tide_level: value
+                });
+              }
+            });
+            
+            // 시간순으로 정렬된 배열로 변환
+            const finalData = Array.from(hourMap.values()).sort((a, b) => {
+              return a.record_time.localeCompare(b.record_time);
+            });
+            
+            console.log('집계된 예측 조위 데이터 (1시간 단위):', finalData.length, '개');
+            console.log('첫 번째:', finalData[0]?.record_time, '예측조위:', finalData[0]?.pre_value || finalData[0]?.tide_level);
+            console.log('마지막:', finalData[finalData.length - 1]?.record_time, '예측조위:', finalData[finalData.length - 1]?.pre_value || finalData[finalData.length - 1]?.tide_level);
+            
+            // 예측 조위 데이터 사용
+            setTideData(finalData);
           } else {
-            console.warn('조위 데이터가 비어있거나 배열이 아닙니다:', data);
+            console.warn('조위 데이터가 비어있거나 배열이 아닙니다:', allData);
             setError('조위 데이터가 없습니다. (해당 날짜의 데이터가 없을 수 있습니다)');
             setTideData(null);
           }
@@ -1005,57 +1082,97 @@ export default function SlopeDetail() {
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
               <span>• 최소 수위:</span>
-              <input
-                type="number"
-                value={minLevel}
-                onChange={(e) => {
-                  const value = parseInt(e.target.value, 10);
-                  if (!isNaN(value) && value >= 100) {
-                    setMinLevel(value);
-                  }
-                }}
-                onBlur={(e) => {
-                  const value = parseInt(e.target.value, 10);
-                  if (isNaN(value) || value < 100) {
-                    setMinLevel(100);
-                  }
-                }}
-                style={{
-                  width: '80px',
-                  padding: '4px 8px',
-                  border: '1px solid #d1d5db',
-                  borderRadius: '4px',
-                  fontSize: '13px',
-                  textAlign: 'right'
-                }}
-                min="100"
-              />
-              <span>cm</span>
-              {minLevel !== slope.minWaterLevelCm && (
-                <button
-                  onClick={() => setMinLevel(slope.minWaterLevelCm)}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <input
+                  type="number"
+                  value={minLevelInput}
+                  onChange={(e) => {
+                    const inputValue = e.target.value;
+                    // 입력 필드의 값을 그대로 표시 (문자열로 관리)
+                    setMinLevelInput(inputValue);
+                    
+                    // 숫자로 변환 가능한 경우에만 실제 값 업데이트
+                    if (inputValue === '') {
+                      // 빈 값은 허용 (입력 중일 수 있음)
+                      return;
+                    }
+                    
+                    const value = parseInt(inputValue, 10);
+                    if (!isNaN(value) && value >= 100) {
+                      // 유효한 값(100 이상)이면 실제 값 업데이트
+                      setMinLevel(value);
+                    }
+                    // 100 미만이거나 유효하지 않은 값이면 입력 필드만 업데이트하고 실제 값은 유지
+                  }}
+                  onBlur={(e) => {
+                    const inputValue = e.target.value;
+                    const value = parseInt(inputValue, 10);
+                    
+                    // 포커스를 잃을 때 유효하지 않은 값이면 기본값으로 설정
+                    if (inputValue === '' || isNaN(value) || value < 100) {
+                      setMinLevel(Math.max(100, slope.minWaterLevelCm));
+                      setMinLevelInput(String(Math.max(100, slope.minWaterLevelCm)));
+                    } else {
+                      // 유효한 값이면 입력 필드와 실제 값 동기화
+                      setMinLevel(value);
+                      setMinLevelInput(String(value));
+                    }
+                  }}
+                  onFocus={(e) => {
+                    // 포커스를 받을 때 전체 선택 (편의성)
+                    e.target.select();
+                  }}
+                  onKeyDown={(e) => {
+                    // Enter 키를 누르면 포커스 해제 (입력 완료)
+                    if (e.key === 'Enter') {
+                      e.target.blur();
+                    }
+                  }}
                   style={{
+                    width: '80px',
                     padding: '4px 8px',
-                    fontSize: '11px',
                     border: '1px solid #d1d5db',
                     borderRadius: '4px',
-                    backgroundColor: '#f9fafb',
-                    color: '#6b7280',
-                    cursor: 'pointer'
+                    fontSize: '13px',
+                    textAlign: 'right'
                   }}
-                  onMouseOver={(e) => {
-                    e.target.style.backgroundColor = '#f3f4f6';
-                  }}
-                  onMouseOut={(e) => {
-                    e.target.style.backgroundColor = '#f9fafb';
-                  }}
-                >
-                  초기화
-                </button>
-              )}
+                  min="100"
+                  placeholder={slope.minWaterLevelCm.toString()}
+                />
+                <span>cm</span>
+                {/* 사용자가 기본값과 다른 값을 입력한 경우에만 초기화 버튼 표시 */}
+                {minLevel !== slope.minWaterLevelCm && (
+                  <button
+                    onClick={() => {
+                      setMinLevel(slope.minWaterLevelCm);
+                      setMinLevelInput(String(slope.minWaterLevelCm));
+                    }}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '12px',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '4px',
+                      backgroundColor: '#f9fafb',
+                      color: '#6b7280',
+                      cursor: 'pointer',
+                      fontWeight: 500,
+                      transition: 'background-color 0.2s'
+                    }}
+                    onMouseOver={(e) => {
+                      e.target.style.backgroundColor = '#f3f4f6';
+                    }}
+                    onMouseOut={(e) => {
+                      e.target.style.backgroundColor = '#f9fafb';
+                    }}
+                    title="기본값으로 초기화"
+                  >
+                    초기화
+                  </button>
+                )}
+              </div>
             </div>
             <div style={{ fontSize: '11px', color: '#6b7280', marginLeft: '20px', marginTop: '2px' }}>
-              자신의 보트에 맞게 최소 수위를 조절하세요.
+              자신의 보트에 맞게 최소 수위를 조절하세요. (최소 100cm 이상)
             </div>
           </div>
           <div>• 이용료: {slope.fee}</div>
