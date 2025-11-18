@@ -809,9 +809,43 @@ export default function SlopeDetail() {
   const [minLevelInput, setMinLevelInput] = useState(String(slope?.minWaterLevelCm || 300));
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [waterTemp, setWaterTemp] = useState(null);
+  const [isFavorite, setIsFavorite] = useState(false);
+
+  // 즐겨찾기 관련 함수
+  const getFavorites = () => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const favorites = localStorage.getItem('slopeFavorites');
+      return favorites ? JSON.parse(favorites) : [];
+    } catch (e) {
+      return [];
+    }
+  };
+
+  const toggleFavorite = () => {
+    if (typeof window === 'undefined' || !slope) return;
+    try {
+      const favorites = getFavorites();
+      const index = favorites.indexOf(slope.id);
+      if (index > -1) {
+        favorites.splice(index, 1);
+        setIsFavorite(false);
+      } else {
+        favorites.push(slope.id);
+        setIsFavorite(true);
+      }
+      localStorage.setItem('slopeFavorites', JSON.stringify(favorites));
+    } catch (e) {
+      console.error('즐겨찾기 저장 오류:', e);
+    }
+  };
 
   useEffect(() => {
     if (!slope) return;
+    
+    // 즐겨찾기 상태 확인
+    const favorites = getFavorites();
+    setIsFavorite(favorites.includes(slope.id));
     
     // slope가 변경되면 최소 수위도 초기화
     setMinLevel(slope.minWaterLevelCm);
@@ -1072,8 +1106,31 @@ export default function SlopeDetail() {
           ◀
         </button>
         <div className="title">{slope.name}</div>
-        <button className="favorite-button" aria-label="즐겨찾기">
-          ☆
+        <button 
+          className="favorite-button" 
+          aria-label={isFavorite ? '즐겨찾기 해제' : '즐겨찾기 추가'}
+          onClick={toggleFavorite}
+          style={{
+            background: 'none',
+            border: 'none',
+            fontSize: '20px',
+            cursor: 'pointer',
+            padding: '4px',
+            color: isFavorite ? '#fbbf24' : '#d1d5db',
+            transition: 'color 0.2s'
+          }}
+          onMouseEnter={(e) => {
+            if (!isFavorite) {
+              e.target.style.color = '#fbbf24';
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (!isFavorite) {
+              e.target.style.color = '#d1d5db';
+            }
+          }}
+        >
+          {isFavorite ? '★' : '☆'}
         </button>
       </div>
 

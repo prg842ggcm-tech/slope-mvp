@@ -1,7 +1,42 @@
 // pages/index.js
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/router';
 import slopes from '../data/slopes.json';
+
+// 즐겨찾기 관련 유틸리티 함수
+function getFavorites() {
+  if (typeof window === 'undefined') return [];
+  try {
+    const favorites = localStorage.getItem('slopeFavorites');
+    return favorites ? JSON.parse(favorites) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function toggleFavorite(slopeId) {
+  if (typeof window === 'undefined') return;
+  try {
+    const favorites = getFavorites();
+    const index = favorites.indexOf(slopeId);
+    if (index > -1) {
+      favorites.splice(index, 1);
+    } else {
+      favorites.push(slopeId);
+    }
+    localStorage.setItem('slopeFavorites', JSON.stringify(favorites));
+    return favorites;
+  } catch (e) {
+    console.error('즐겨찾기 저장 오류:', e);
+    return [];
+  }
+}
+
+function isFavorite(slopeId) {
+  const favorites = getFavorites();
+  return favorites.includes(slopeId);
+}
 
 function formatDateToString(date) {
   const y = date.getFullYear();
@@ -120,9 +155,20 @@ function getAvailableWindows(data, classified, sunTimes) {
 }
 
 export default function Home() {
+  const router = useRouter();
   const [slopeWindows, setSlopeWindows] = useState({});
   const [slopeWaterTemps, setSlopeWaterTemps] = useState({});
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [favorites, setFavorites] = useState([]);
+  const [isClient, setIsClient] = useState(false);
+
+  // 클라이언트 마운트 확인 (Hydration 오류 방지)
+  useEffect(() => {
+    setIsClient(true);
+    const loadedFavorites = getFavorites();
+    setFavorites(loadedFavorites);
+  }, []);
 
   useEffect(() => {
     const fetchAllSlopeWindows = async () => {
@@ -241,17 +287,80 @@ export default function Home() {
     fetchAllSlopeWindows();
   }, []);
 
+  // 검색 및 필터링 로직
+  const filteredSlopes = slopes.filter((slope) => {
+    // 검색어가 있으면 전체 슬로프 목록에서 검색
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      const nameMatch = slope.name.toLowerCase().includes(query);
+      const regionMatch = slope.region.toLowerCase().includes(query);
+      return nameMatch || regionMatch;
+    }
+    
+    // 클라이언트가 마운트되기 전에는 빈 배열 반환 (Hydration 오류 방지)
+    if (!isClient) {
+      return false;
+    }
+    
+    // 검색어가 없으면 즐겨찾기한 슬로프만 표시
+    return isFavorite(slope.id);
+  });
+
+  const handleFavoriteClick = (e, slopeId) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const newFavorites = toggleFavorite(slopeId);
+    setFavorites(newFavorites);
+  };
+
   return (
     <div className="app-container">
       <h1 style={{ fontSize: '20px', fontWeight: 700, marginBottom: 12 }}>
         보트 슬로프 목록 (MVP)
       </h1>
-      <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 16 }}>
-        각 슬로프를 클릭하면 오늘 기준 가용 시간대를 확인할 수 있습니다.
-      </p>
+      
+      {/* 검색 필드 */}
+      <div style={{ marginBottom: 16 }}>
+        <input
+          type="text"
+          placeholder="슬로프명 또는 지역명으로 검색..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          style={{
+            width: '100%',
+            padding: '8px 12px',
+            border: '1px solid #d1d5db',
+            borderRadius: '6px',
+            fontSize: '13px',
+            outline: 'none',
+            marginBottom: 8
+          }}
+          onFocus={(e) => {
+            e.target.style.borderColor = '#3b82f6';
+          }}
+          onBlur={(e) => {
+            e.target.style.borderColor = '#d1d5db';
+          }}
+        />
+        <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 16 }}>
+          각 슬로프를 탭해서 슬로프 이용가능 시간대를 확인해보세요.
+        </p>
+      </div>
 
-      <div>
-        {slopes.map((slope) => {
+      {filteredSlopes.length === 0 ? (
+        <div style={{ 
+          padding: '40px 20px', 
+          textAlign: 'center', 
+          color: '#9ca3af',
+          fontSize: '14px'
+        }}>
+          {searchQuery.trim() 
+            ? '검색 결과가 없습니다.' 
+            : '즐겨찾기한 슬로프가 없습니다. 슬로프 상세 페이지에서 별 모양 버튼을 눌러 즐겨찾기에 추가해보세요.'}
+        </div>
+      ) : (
+        <div>
+          {filteredSlopes.map((slope) => {
           const windows = slopeWindows[slope.id] || [];
           const waterTemp = slopeWaterTemps[slope.id];
           
@@ -277,23 +386,50 @@ export default function Home() {
                   style={{
                     display: 'flex',
                     alignItems: 'center',
+                    justifyContent: 'space-between',
                     marginBottom: 4
                   }}
                 >
-                  <span style={{ fontWeight: 600 }}>{slope.name}</span>
-                  <span
+                  <div style={{ display: 'flex', alignItems: 'center' }}>
+                    <span style={{ fontWeight: 600 }}>{slope.name}</span>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        color: '#6b7280',
+                        marginLeft: 6
+                      }}
+                    >
+                      ({slope.region})
+                    </span>
+                  </div>
+                  <button
+                    onClick={(e) => handleFavoriteClick(e, slope.id)}
                     style={{
-                      fontSize: 11,
-                      color: '#6b7280',
-                      marginLeft: 6
+                      background: 'none',
+                      border: 'none',
+                      fontSize: '18px',
+                      cursor: 'pointer',
+                      padding: '4px',
+                      color: isFavorite(slope.id) ? '#fbbf24' : '#d1d5db',
+                      transition: 'color 0.2s'
                     }}
+                    onMouseEnter={(e) => {
+                      if (!isFavorite(slope.id)) {
+                        e.target.style.color = '#fbbf24';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!isFavorite(slope.id)) {
+                        e.target.style.color = '#d1d5db';
+                      }
+                    }}
+                    aria-label={isFavorite(slope.id) ? '즐겨찾기 해제' : '즐겨찾기 추가'}
                   >
-                    ({slope.region})
-                  </span>
+                    {isFavorite(slope.id) ? '★' : '☆'}
+                  </button>
                 </div>
                 <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 4 }}>
-                  최소 수위 기준: {slope.minWaterLevelCm}cm · 사용가능 여부:{' '}
-                  {slope.availableStatus}
+                  최소 수위 기준: {slope.minWaterLevelCm}cm
                   {waterTemp !== undefined && (
                     <span> · 수온: {waterTemp.toFixed(1)}℃</span>
                   )}
@@ -330,7 +466,8 @@ export default function Home() {
             </Link>
           );
         })}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
